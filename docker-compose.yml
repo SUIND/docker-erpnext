@@ -214,17 +214,9 @@ services:
     restart: unless-stopped
     volumes:
       - sites:/home/frappe/frappe-bench/sites
-    healthcheck:
-      # Assuming socket.io exposes a basic HTTP endpoint on port 9000
-      test: ["CMD", "curl", "-f", "http://localhost:9000/"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
     depends_on:
       - redis
     labels:
-      - "autoheal=true" # Autoheal will monitor this container
       - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
 
   cloudflared:
