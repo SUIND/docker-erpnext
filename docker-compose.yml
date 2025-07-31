@@ -1,15 +1,11 @@
 # image: https://registry.hub.docker.com/r/frappe/erpnext-worker
 # docs: https://github.com/frappe/frappe_docker/blob/main/pwd.yml
 
-version: "3.8"
-
 services:
   backend:
     image: frappe/erpnext-worker:${APP_VERSION}
     container_name: ${APP_NAME} 
-    deploy:
-      restart_policy:
-        condition: on-failure
+    restart: unless-stopped
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - assets:/home/frappe/frappe-bench/sites/assets
@@ -17,6 +13,7 @@ services:
   configurator:
     image: frappe/erpnext-worker:${APP_VERSION}
     container_name: ${APP_NAME}-configurator
+    restart: unless-stopped
     command:
       - configure.py
     environment:
@@ -32,9 +29,6 @@ services:
   create-site:
     image: frappe/erpnext-worker:${APP_VERSION}
     container_name: ${APP_NAME}-create-site
-    deploy:
-      restart_policy:
-        condition: on-failure
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - assets:/home/frappe/frappe-bench/sites/assets
@@ -63,6 +57,7 @@ services:
   db:
     image: mariadb:10.6
     container_name: ${APP_NAME}-db
+    restart: unless-stopped
     healthcheck:
       test: mysqladmin ping -h localhost --password=${DB_MARIA_PASSWORD}
       interval: 1s
@@ -85,9 +80,7 @@ services:
   frontend:
     image: frappe/erpnext-nginx:${APP_VERSION}
     container_name: ${APP_NAME}-frontend
-    deploy:
-      restart_policy:
-        condition: on-failure
+    restart: unless-stopped
     environment:
       BACKEND: backend:8000
       FRAPPE_SITE_NAME_HEADER: frontend
@@ -104,9 +97,7 @@ services:
   queue-default:
     image: frappe/erpnext-worker:${APP_VERSION}
     container_name: ${APP_NAME}-queue-default
-    deploy:
-      restart_policy:
-        condition: on-failure
+    restart: unless-stopped
     command:
       - bench
       - worker
@@ -118,9 +109,7 @@ services:
   queue-long:
     image: frappe/erpnext-worker:${APP_VERSION}
     container_name: ${APP_NAME}-queue-long
-    deploy:
-      restart_policy:
-        condition: on-failure
+    restart: unless-stopped
     command:
       - bench
       - worker
@@ -132,9 +121,7 @@ services:
   queue-short:
     image: frappe/erpnext-worker:${APP_VERSION}
     container_name: ${APP_NAME}-queue-short
-    deploy:
-      restart_policy:
-        condition: on-failure
+    restart: unless-stopped
     command:
       - bench
       - worker
@@ -146,18 +133,14 @@ services:
   redis:
     image: redis:6.2-alpine
     container_name: ${APP_NAME}-redis
-    deploy:
-      restart_policy:
-        condition: on-failure
+    restart: unless-stopped
     volumes:
       - redis-data:/data
 
   scheduler:
     image: frappe/erpnext-worker:${APP_VERSION}
     container_name: ${APP_NAME}-scheduler
-    deploy:
-      restart_policy:
-        condition: on-failure
+    restart: unless-stopped
     command:
       - bench
       - schedule
@@ -167,11 +150,17 @@ services:
   websocket:
     image: frappe/frappe-socketio:${APP_VERSION}
     container_name: ${APP_NAME}-websocket
-    deploy:
-      restart_policy:
-        condition: on-failure
+    restart: unless-stopped
     volumes:
       - sites:/home/frappe/frappe-bench/sites
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ${APP_NAME}-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TOKEN}
+    depends_on:
+      - frontend
 
 volumes:
   assets:
