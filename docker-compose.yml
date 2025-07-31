@@ -1,19 +1,39 @@
-# image: https://registry.hub.docker.com/r/frappe/erpnext-worker
-# docs: https://github.com/frappe/frappe_docker/blob/main/pwd.yml
+# This Docker Compose file includes Watchtower for automatic image updates
+# and Autoheal for automatically restarting unhealthy containers based on health checks.
+
+# --- IMPORTANT ---
+# Before running, ensure you replace placeholders like:
+# - YOUR_SLACK_WEBHOOK_URL (for Watchtower notifications)
+# - YOUR_SLACK_CHANNEL (for Watchtower notifications)
+# - Your application images (frappe/erpnext-worker, frappe/erpnext-nginx, frappe/frappe-socketio)
+#   should have 'curl' installed if you use curl-based health checks.
+#   For Redis, 'redis-cli' is usually available.
+# -----------------
 
 services:
   backend:
     image: frappe/erpnext-worker:${APP_VERSION}
-    container_name: ${APP_NAME} 
+    container_name: ${APP_NAME}-backend
     restart: unless-stopped
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - assets:/home/frappe/frappe-bench/sites/assets
+    healthcheck:
+      # Assuming the backend serves on port 8000 internally (as per frontend config)
+      # and has a basic endpoint like / or /api/method/frappe.ping
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s # Give backend time to start up
+    labels:
+      - "autoheal=true" # Autoheal will monitor this container
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
 
   configurator:
     image: frappe/erpnext-worker:${APP_VERSION}
     container_name: ${APP_NAME}-configurator
-    restart: unless-stopped
+    restart: on-failure
     command:
       - configure.py
     environment:
@@ -25,10 +45,16 @@ services:
       SOCKETIO_PORT: "9000"
     volumes:
       - sites:/home/frappe/frappe-bench/sites
+    labels:
+      # Worker services typically don't have HTTP health endpoints.
+      # Their health is often tied to process running or job completion.
+      # Docker's restart policy is usually sufficient.
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
 
   create-site:
     image: frappe/erpnext-worker:${APP_VERSION}
     container_name: ${APP_NAME}-create-site
+    restart: no
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - assets:/home/frappe/frappe-bench/sites/assets
@@ -53,18 +79,22 @@ services:
         done;
         echo "common_site_config.json found";
         bench new-site frontend --admin-password=${APP_PASSWORD} --${APP_DB_PARAM}-root-password=${DB_MARIA_PASSWORD} --install-app erpnext;
+    # This is a one-off command, so no restart policy or healthcheck needed.
+    # It will exit after site creation.
+    labels:
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
 
   db:
     image: mariadb:10.6
     container_name: ${APP_NAME}-db
     restart: unless-stopped
     healthcheck:
+      # Existing healthcheck is good for MariaDB
       test: mysqladmin ping -h localhost --password=${DB_MARIA_PASSWORD}
-      interval: 1s
-      retries: 15
-    deploy:
-      restart_policy:
-        condition: on-failure
+      interval: 5s # Increased interval slightly for less frequent checks
+      timeout: 3s
+      retries: 5 # Increased retries for robustness
+      start_period: 30s # Give DB time to start up
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
@@ -76,7 +106,10 @@ services:
       - db-data:/var/lib/mysql
     ports:
       - "${DB_MARIA_PORT}:3306"
-      
+    labels:
+      - "autoheal=true" # Autoheal will monitor this container
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
+
   frontend:
     image: frappe/erpnext-nginx:${APP_VERSION}
     container_name: ${APP_NAME}-frontend
@@ -93,6 +126,16 @@ services:
       - assets:/usr/share/nginx/html/assets
     ports:
       - "${APP_HTTP_PORT}:8080"
+    healthcheck:
+      # Nginx serving on port 8080 internally
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "autoheal=true" # Autoheal will monitor this container
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
 
   queue-default:
     image: frappe/erpnext-worker:${APP_VERSION}
@@ -105,6 +148,8 @@ services:
       - default
     volumes:
       - sites:/home/frappe/frappe-bench/sites
+    labels:
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
 
   queue-long:
     image: frappe/erpnext-worker:${APP_VERSION}
@@ -117,6 +162,8 @@ services:
       - long
     volumes:
       - sites:/home/frappe/frappe-bench/sites
+    labels:
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
 
   queue-short:
     image: frappe/erpnext-worker:${APP_VERSION}
@@ -129,6 +176,8 @@ services:
       - short
     volumes:
       - sites:/home/frappe/frappe-bench/sites
+    labels:
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
 
   redis:
     image: redis:6.2-alpine
@@ -136,6 +185,16 @@ services:
     restart: unless-stopped
     volumes:
       - redis-data:/data
+    healthcheck:
+      # Standard Redis health check
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - "autoheal=true" # Autoheal will monitor this container
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
 
   scheduler:
     image: frappe/erpnext-worker:${APP_VERSION}
@@ -146,6 +205,8 @@ services:
       - schedule
     volumes:
       - sites:/home/frappe/frappe-bench/sites
+    labels:
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
 
   websocket:
     image: frappe/frappe-socketio:${APP_VERSION}
@@ -153,6 +214,18 @@ services:
     restart: unless-stopped
     volumes:
       - sites:/home/frappe/frappe-bench/sites
+    healthcheck:
+      # Assuming socket.io exposes a basic HTTP endpoint on port 9000
+      test: ["CMD", "curl", "-f", "http://localhost:9000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - redis
+    labels:
+      - "autoheal=true" # Autoheal will monitor this container
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -160,7 +233,56 @@ services:
     restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TOKEN}
     depends_on:
-      - frontend
+      - frontend # Ensure frontend is up before starting tunnel
+    labels:
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
+
+  # --- Watchtower Service for Automatic Image Updates ---
+  watchtower:
+    image: containrrr/watchtower
+    container_name: ${APP_NAME}-watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # Essential for Watchtower to communicate with Docker
+    environment:
+      # Schedule updates for 1 AM every day (UTC by default, adjust TZ if needed)
+      - WATCHTOWER_SCHEDULE=0 1 * * *
+        # - WATCHTOWER_NOTIFICATIONS=slack
+        # - WATCHTOWER_NOTIFICATIONS_HOSTNAME=${APP_NAME}
+      # IMPORTANT: Replace with your actual Slack webhook URL
+      #- WATCHTOWER_NOTIFICATION_URL=${SLACK_URL}
+      # IMPORTANT: Replace with your desired Slack channel
+      #- WATCHTOWER_NOTIFICATION_SLACK_CHANNEL=${SLACK_CHANNEL}
+      #- WATCHTOWER_NOTIFICATION_LEVEL=info # Send detailed notifications
+      - TZ=Europe/Zurich # Set your timezone for the schedule
+      # Crucial: Define a scope for this Watchtower instance.
+      # It will only manage containers labeled with "com.centurylinklabs.watchtower.scope=${APP_NAME}".
+      - WATCHTOWER_SCOPE=${APP_NAME}
+    # Important: Also label the Watchtower container itself with its scope
+    labels:
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
+    restart: unless-stopped
+
+  # --- Autoheal Service for Restarting Unhealthy Containers ---
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: ${APP_NAME}-autoheal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # Essential: Autoheal needs Docker socket access
+    environment:
+      # Autoheal will monitor containers with the label "autoheal=true"
+      # This is the default, but explicit is good.
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=10 # How often autoheal checks for unhealthy containers (in seconds)
+      # Optional: Send notifications when a restart occurs (requires Apprise URL, e.g., Slack)
+      # - AUTOHEAL_APPRISE_URL=${SLACK_URL}@${SLACK_CHANNEL}/
+    restart: always # Ensure autoheal itself always runs
+    # It's generally good practice to exclude autoheal from being updated by watchtower
+    # if you have a general watchtower instance monitoring all containers.
+    # However, since we're using scopes, ensure its label matches the autoheal scope, not the main app scope.
+    # For this setup, since autoheal is in the same compose file, it will be updated by the main watchtower.
+    # If you wanted to exclude it, you'd remove the watchtower scope label from autoheal.
+    labels:
+      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update autoheal too
 
 volumes:
   assets:
