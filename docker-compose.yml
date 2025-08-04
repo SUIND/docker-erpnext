@@ -18,16 +18,7 @@ services:
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - assets:/home/frappe/frappe-bench/sites/assets
-    healthcheck:
-      # Assuming the backend serves on port 8000 internally (as per frontend config)
-      # and has a basic endpoint like / or /api/method/frappe.ping
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s # Give backend time to start up
     labels:
-      - "autoheal=true" # Autoheal will monitor this container
       - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
 
   configurator:
