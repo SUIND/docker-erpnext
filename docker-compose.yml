@@ -94,7 +94,11 @@ services:
           fi
         done;
         echo "sites/common_site_config.json found";
-        bench new-site $$SITE_NAME --mariadb-user-host-login-scope='%' --admin-password=${APP_PASSWORD} --db-root-username=root --db-root-password=${DB_MARIA_PASSWORD} --install-app erpnext --install-app hrms --install-app crm --install-app helpdesk --install-app insights --install-app wiki --install-app drive --install-app india_compliance --set-default;
+        if [ -f sites/$$SITE_NAME/site_config.json ]; then
+          echo "Site $$SITE_NAME already exists, skipping creation";
+        else
+          bench new-site $$SITE_NAME --mariadb-user-host-login-scope='%' --admin-password=${APP_PASSWORD} --db-root-username=root --db-root-password=${DB_MARIA_PASSWORD} --install-app erpnext --install-app hrms --install-app crm --install-app helpdesk --install-app insights --install-app wiki --install-app drive --install-app india_compliance --set-default;
+        fi;
 
   db:
     image: mariadb:10.6
