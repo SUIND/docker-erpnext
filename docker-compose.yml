@@ -1,279 +1,270 @@
-# This Docker Compose file includes Watchtower for automatic image updates
-# and Autoheal for automatically restarting unhealthy containers based on health checks.
-
-# --- IMPORTANT ---
-# Before running, ensure you replace placeholders like:
-# - YOUR_SLACK_WEBHOOK_URL (for Watchtower notifications)
-# - YOUR_SLACK_CHANNEL (for Watchtower notifications)
-# - Your application images (frappe/erpnext-worker, frappe/erpnext-nginx, frappe/frappe-socketio)
-#   should have 'curl' installed if you use curl-based health checks.
-#   For Redis, 'redis-cli' is usually available.
-# -----------------
+# ERPNext v15 with HRMS - Docker Compose
+# Based on official Frappe Docker setup
 
 services:
   backend:
-    image: frappe/erpnext-worker:${APP_VERSION}
+    image: erpnext-hrms:${APP_VERSION}
+    build: .
     container_name: ${APP_NAME}-backend
     restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      create-site:
+        condition: service_completed_successfully
     volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - assets:/home/frappe/frappe-bench/sites/assets
-    labels:
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
-
-  configurator:
-    image: frappe/erpnext-worker:${APP_VERSION}
-    container_name: ${APP_NAME}-configurator
-    restart: on-failure
-    command:
-      - configure.py
+      - ./data/sites:/home/frappe/frappe-bench/sites
+      - ./data/logs:/home/frappe/frappe-bench/logs
     environment:
       DB_HOST: db
       DB_PORT: "3306"
-      REDIS_CACHE: redis:6379/0
-      REDIS_QUEUE: redis:6379/1
-      REDIS_SOCKETIO: redis:6379/2
-      SOCKETIO_PORT: "9000"
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-    labels:
-      # Worker services typically don't have HTTP health endpoints.
-      # Their health is often tied to process running or job completion.
-      # Docker's restart policy is usually sufficient.
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
+      MYSQL_ROOT_PASSWORD: ${DB_MARIA_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_MARIA_PASSWORD}
 
-  create-site:
-    image: frappe/erpnext-worker:${APP_VERSION}
-    container_name: ${APP_NAME}-create-site
-    restart: no
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - assets:/home/frappe/frappe-bench/sites/assets
+  configurator:
+    image: erpnext-hrms:${APP_VERSION}
+    build: .
+    container_name: ${APP_NAME}-configurator
+    restart: "no"
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-cache:
+        condition: service_started
+      redis-queue:
+        condition: service_started
     entrypoint:
       - bash
       - -c
     command:
       - >
-        wait-for-it -t 20 db:3306;
-        wait-for-it -t 20 redis:6379;
+        ls -1 apps > sites/apps.txt;
+        echo '{}' > sites/common_site_config.json;
+        bench set-config -g db_host $$DB_HOST;
+        bench set-config -gp db_port $$DB_PORT;
+        bench set-config -g redis_cache "redis://$$REDIS_CACHE";
+        bench set-config -g redis_queue "redis://$$REDIS_QUEUE";
+        bench set-config -g redis_socketio "redis://$$REDIS_QUEUE";
+        bench set-config -gp socketio_port $$SOCKETIO_PORT;
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      SOCKETIO_PORT: "9000"
+    volumes:
+      - ./data/sites:/home/frappe/frappe-bench/sites
+      - ./data/logs:/home/frappe/frappe-bench/logs
+
+  create-site:
+    image: erpnext-hrms:${APP_VERSION}
+    build: .
+    container_name: ${APP_NAME}-create-site
+    restart: "no"
+    networks:
+      - backend
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    environment:
+      SITE_NAME: ${APP_URL:-frontend}
+    volumes:
+      - ./data/sites:/home/frappe/frappe-bench/sites
+      - ./data/logs:/home/frappe/frappe-bench/logs
+    entrypoint:
+      - bash
+      - -c
+    command:
+      - >
+        wait-for-it -t 120 db:3306;
+        wait-for-it -t 120 redis-cache:6379;
+        wait-for-it -t 120 redis-queue:6379;
         export start=`date +%s`;
-        until [[ -n `grep -hs ^ common_site_config.json | jq -r ".db_host // empty"` ]] && \
-          [[ -n `grep -hs ^ common_site_config.json | jq -r ".redis_cache // empty"` ]] && \
-          [[ -n `grep -hs ^ common_site_config.json | jq -r ".redis_queue // empty"` ]];
+        until [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".db_host // empty"` ]] && \
+          [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_cache // empty"` ]] && \
+          [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_queue // empty"` ]];
         do
-          echo "Waiting for common_site_config.json to be created";
+          echo "Waiting for sites/common_site_config.json to be created";
           sleep 5;
-          if (( `date +%s`-start > 20 )); then
-            echo "could not find common_site_config.json with required keys";
+          if (( `date +%s`-start > 120 )); then
+            echo "could not find sites/common_site_config.json with required keys";
             exit 1
           fi
         done;
-        echo "common_site_config.json found";
-        bench new-site frontend --admin-password=${APP_PASSWORD} --${APP_DB_PARAM}-root-password=${DB_MARIA_PASSWORD} --install-app erpnext;
-    # This is a one-off command, so no restart policy or healthcheck needed.
-    # It will exit after site creation.
-    labels:
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
+        echo "sites/common_site_config.json found";
+        bench new-site $$SITE_NAME --mariadb-user-host-login-scope='%' --admin-password=${APP_PASSWORD} --db-root-username=root --db-root-password=${DB_MARIA_PASSWORD} --install-app erpnext --install-app hrms --install-app crm --install-app helpdesk --install-app insights --install-app wiki --install-app drive --install-app india_compliance --set-default;
 
   db:
     image: mariadb:10.6
     container_name: ${APP_NAME}-db
     restart: unless-stopped
+    networks:
+      - backend
     healthcheck:
-      # Existing healthcheck is good for MariaDB
       test: mysqladmin ping -h localhost --password=${DB_MARIA_PASSWORD}
-      interval: 5s # Increased interval slightly for less frequent checks
+      interval: 5s
       timeout: 3s
-      retries: 5 # Increased retries for robustness
-      start_period: 30s # Give DB time to start up
+      retries: 20
+      start_period: 30s
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --skip-character-set-client-handshake
-      - --skip-innodb-read-only-compressed # Temporary fix for MariaDB 10.6
+      - --skip-innodb-read-only-compressed
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_MARIA_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_MARIA_PASSWORD}
     volumes:
-      - db-data:/var/lib/mysql
+      - ./data/db:/var/lib/mysql
     ports:
       - "${DB_MARIA_PORT}:3306"
-    labels:
-      - "autoheal=true" # Autoheal will monitor this container
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
 
   frontend:
-    image: frappe/erpnext-nginx:${APP_VERSION}
+    image: erpnext-hrms:${APP_VERSION}
+    build: .
     container_name: ${APP_NAME}-frontend
     restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      - websocket
+      - backend
+    command:
+      - nginx-entrypoint.sh
     environment:
       BACKEND: backend:8000
-      FRAPPE_SITE_NAME_HEADER: frontend
+      FRAPPE_SITE_NAME_HEADER: ${APP_URL:-frontend}
       SOCKETIO: websocket:9000
       UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
       UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
       UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: "120"
+      CLIENT_MAX_BODY_SIZE: 50m
     volumes:
-      - sites:/usr/share/nginx/html/sites
-      - assets:/usr/share/nginx/html/assets
+      - ./data/sites:/home/frappe/frappe-bench/sites
+      - ./data/logs:/home/frappe/frappe-bench/logs
     ports:
       - "${APP_HTTP_PORT}:8080"
-    healthcheck:
-      # Nginx serving on port 8080 internally
-      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    labels:
-      - "autoheal=true" # Autoheal will monitor this container
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
-
-  queue-default:
-    image: frappe/erpnext-worker:${APP_VERSION}
-    container_name: ${APP_NAME}-queue-default
-    restart: unless-stopped
-    command:
-      - bench
-      - worker
-      - --queue
-      - default
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-    labels:
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
 
   queue-long:
-    image: frappe/erpnext-worker:${APP_VERSION}
+    image: erpnext-hrms:${APP_VERSION}
+    build: .
     container_name: ${APP_NAME}-queue-long
     restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      create-site:
+        condition: service_completed_successfully
     command:
       - bench
       - worker
       - --queue
-      - long
+      - long,default,short
     volumes:
-      - sites:/home/frappe/frappe-bench/sites
-    labels:
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
+      - ./data/sites:/home/frappe/frappe-bench/sites
+      - ./data/logs:/home/frappe/frappe-bench/logs
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
 
   queue-short:
-    image: frappe/erpnext-worker:${APP_VERSION}
+    image: erpnext-hrms:${APP_VERSION}
+    build: .
     container_name: ${APP_NAME}-queue-short
     restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      create-site:
+        condition: service_completed_successfully
     command:
       - bench
       - worker
       - --queue
-      - short
+      - short,default
     volumes:
-      - sites:/home/frappe/frappe-bench/sites
-    labels:
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
+      - ./data/sites:/home/frappe/frappe-bench/sites
+      - ./data/logs:/home/frappe/frappe-bench/logs
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
 
-  redis:
-    image: redis:6.2-alpine
-    container_name: ${APP_NAME}-redis
+  redis-cache:
+    image: redis:8.2-alpine
+    container_name: ${APP_NAME}-redis-cache
     restart: unless-stopped
+    networks:
+      - backend
+
+  redis-queue:
+    image: redis:8.2-alpine
+    container_name: ${APP_NAME}-redis-queue
+    restart: unless-stopped
+    networks:
+      - backend
     volumes:
-      - redis-data:/data
-    healthcheck:
-      # Standard Redis health check
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-    labels:
-      - "autoheal=true" # Autoheal will monitor this container
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
+      - ./data/redis-queue:/data
 
   scheduler:
-    image: frappe/erpnext-worker:${APP_VERSION}
+    image: erpnext-hrms:${APP_VERSION}
+    build: .
     container_name: ${APP_NAME}-scheduler
     restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      create-site:
+        condition: service_completed_successfully
     command:
       - bench
       - schedule
     volumes:
-      - sites:/home/frappe/frappe-bench/sites
-    labels:
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
+      - ./data/sites:/home/frappe/frappe-bench/sites
+      - ./data/logs:/home/frappe/frappe-bench/logs
 
   websocket:
-    image: frappe/frappe-socketio:${APP_VERSION}
+    image: erpnext-hrms:${APP_VERSION}
+    build: .
     container_name: ${APP_NAME}-websocket
     restart: unless-stopped
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
+    networks:
+      - backend
     depends_on:
-      - redis
-    labels:
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update this container
+      create-site:
+        condition: service_completed_successfully
+    command:
+      - node
+      - /home/frappe/frappe-bench/apps/frappe/socketio.js
+    volumes:
+      - ./data/sites:/home/frappe/frappe-bench/sites
+      - ./data/logs:/home/frappe/frappe-bench/logs
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
 
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: ${APP_NAME}-cloudflared
     restart: unless-stopped
+    networks:
+      - frontend
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TOKEN}
     depends_on:
-      - frontend # Ensure frontend is up before starting tunnel
-    labels:
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
-
-  # --- Watchtower Service for Automatic Image Updates ---
-  watchtower:
-    image: containrrr/watchtower
-    container_name: ${APP_NAME}-watchtower
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock # Essential for Watchtower to communicate with Docker
-    environment:
-      # Schedule updates for 1 AM every day (UTC by default, adjust TZ if needed)
-      - WATCHTOWER_SCHEDULE=0 1 * * *
-        # - WATCHTOWER_NOTIFICATIONS=slack
-        # - WATCHTOWER_NOTIFICATIONS_HOSTNAME=${APP_NAME}
-      # IMPORTANT: Replace with your actual Slack webhook URL
-      #- WATCHTOWER_NOTIFICATION_URL=${SLACK_URL}
-      # IMPORTANT: Replace with your desired Slack channel
-      #- WATCHTOWER_NOTIFICATION_SLACK_CHANNEL=${SLACK_CHANNEL}
-      #- WATCHTOWER_NOTIFICATION_LEVEL=info # Send detailed notifications
-      - TZ=Europe/Zurich # Set your timezone for the schedule
-      # Crucial: Define a scope for this Watchtower instance.
-      # It will only manage containers labeled with "com.centurylinklabs.watchtower.scope=${APP_NAME}".
-      - WATCHTOWER_SCOPE=${APP_NAME}
-    # Important: Also label the Watchtower container itself with its scope
-    labels:
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}"
-    restart: unless-stopped
-
-  # --- Autoheal Service for Restarting Unhealthy Containers ---
-  autoheal:
-    image: willfarrell/autoheal:latest
-    container_name: ${APP_NAME}-autoheal
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock # Essential: Autoheal needs Docker socket access
-    environment:
-      # Autoheal will monitor containers with the label "autoheal=true"
-      # This is the default, but explicit is good.
-      - AUTOHEAL_CONTAINER_LABEL=autoheal
-      - AUTOHEAL_INTERVAL=10 # How often autoheal checks for unhealthy containers (in seconds)
-      # Optional: Send notifications when a restart occurs (requires Apprise URL, e.g., Slack)
-      # - AUTOHEAL_APPRISE_URL=${SLACK_URL}@${SLACK_CHANNEL}/
-    restart: always # Ensure autoheal itself always runs
-    # It's generally good practice to exclude autoheal from being updated by watchtower
-    # if you have a general watchtower instance monitoring all containers.
-    # However, since we're using scopes, ensure its label matches the autoheal scope, not the main app scope.
-    # For this setup, since autoheal is in the same compose file, it will be updated by the main watchtower.
-    # If you wanted to exclude it, you'd remove the watchtower scope label from autoheal.
-    labels:
-      - "com.centurylinklabs.watchtower.scope=${APP_NAME}" # Watchtower will update autoheal too
-
-volumes:
-  assets:
-  db-data:
-  redis-data:
-  sites:
+      - frontend
 
 networks:
-  default:
-    name: ${APP_NETWORK}
-    external: true
+  frontend:
+    name: ${APP_NAME}-frontend
+    driver: bridge
+  backend:
+    name: ${APP_NAME}-backend
+    driver: bridge
+# All data is stored in local ./data/ directories for easy backup and access
+# No named volumes needed - using bind mounts instead
+
