@@ -22,7 +22,7 @@ RUN HRMS_BRANCH=$(echo ${APP_VERSION} | sed 's/^v/version-/') && \
     git clone --depth 1 --branch main https://github.com/frappe/insights && \
     rm -rf insights/.git && \
     # Install Wiki
-    git clone --depth 1 --branch develop https://github.com/frappe/wiki && \
+    git clone --depth 1 --branch master https://github.com/frappe/wiki && \
     rm -rf wiki/.git && \
     # Install Drive
     git clone --depth 1 --branch main https://github.com/frappe/drive && \
