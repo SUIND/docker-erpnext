@@ -1,10 +1,13 @@
 # ERPNext v15 with HRMS - Docker Compose
 # Based on official Frappe Docker setup
 
+x-backend-image: &backend-image
+  image: erpnext-hrms:${APP_VERSION}
+  build: .
+
 services:
   backend:
-    image: erpnext-hrms:${APP_VERSION}
-    build: .
+    <<: *backend-image
     container_name: ${APP_NAME}-backend
     restart: unless-stopped
     networks:
@@ -22,8 +25,7 @@ services:
       MARIADB_ROOT_PASSWORD: ${DB_MARIA_PASSWORD}
 
   configurator:
-    image: erpnext-hrms:${APP_VERSION}
-    build: .
+    <<: *backend-image
     container_name: ${APP_NAME}-configurator
     restart: "no"
     networks:
@@ -59,8 +61,7 @@ services:
       - ./data/logs:/home/frappe/frappe-bench/logs
 
   create-site:
-    image: erpnext-hrms:${APP_VERSION}
-    build: .
+    <<: *backend-image
     container_name: ${APP_NAME}-create-site
     restart: "no"
     networks:
@@ -124,8 +125,7 @@ services:
       - "${DB_MARIA_PORT}:3306"
 
   frontend:
-    image: erpnext-hrms:${APP_VERSION}
-    build: .
+    <<: *backend-image
     container_name: ${APP_NAME}-frontend
     restart: unless-stopped
     networks:
@@ -152,8 +152,7 @@ services:
       - "${APP_HTTP_PORT}:8080"
 
   queue-long:
-    image: erpnext-hrms:${APP_VERSION}
-    build: .
+    <<: *backend-image
     container_name: ${APP_NAME}-queue-long
     restart: unless-stopped
     networks:
@@ -174,8 +173,7 @@ services:
       FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
 
   queue-short:
-    image: erpnext-hrms:${APP_VERSION}
-    build: .
+    <<: *backend-image
     container_name: ${APP_NAME}-queue-short
     restart: unless-stopped
     networks:
@@ -212,8 +210,7 @@ services:
       - ./data/redis-queue:/data
 
   scheduler:
-    image: erpnext-hrms:${APP_VERSION}
-    build: .
+    <<: *backend-image
     container_name: ${APP_NAME}-scheduler
     restart: unless-stopped
     networks:
@@ -229,8 +226,7 @@ services:
       - ./data/logs:/home/frappe/frappe-bench/logs
 
   websocket:
-    image: erpnext-hrms:${APP_VERSION}
-    build: .
+    <<: *backend-image
     container_name: ${APP_NAME}-websocket
     restart: unless-stopped
     networks:
