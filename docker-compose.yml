@@ -4,10 +4,16 @@
 x-backend-image: &backend-image
   image: erpnext-hrms:${APP_VERSION}
   build: .
+  user: "1000:1000"
+
+x-data-volumes: &data-volumes
+  volumes:
+    - ./data/sites:/home/frappe/frappe-bench/sites
+    - ./data/logs:/home/frappe/frappe-bench/logs
 
 services:
   backend:
-    <<: *backend-image
+    <<: [*backend-image, *data-volumes]
     container_name: ${APP_NAME}-backend
     restart: unless-stopped
     networks:
@@ -15,9 +21,6 @@ services:
     depends_on:
       create-site:
         condition: service_completed_successfully
-    volumes:
-      - ./data/sites:/home/frappe/frappe-bench/sites
-      - ./data/logs:/home/frappe/frappe-bench/logs
     environment:
       DB_HOST: db
       DB_PORT: "3306"
@@ -25,7 +28,7 @@ services:
       MARIADB_ROOT_PASSWORD: ${DB_MARIA_PASSWORD}
 
   configurator:
-    <<: *backend-image
+    <<: [*backend-image, *data-volumes]
     container_name: ${APP_NAME}-configurator
     restart: "no"
     networks:
@@ -56,12 +59,9 @@ services:
       REDIS_CACHE: redis-cache:6379
       REDIS_QUEUE: redis-queue:6379
       SOCKETIO_PORT: "9000"
-    volumes:
-      - ./data/sites:/home/frappe/frappe-bench/sites
-      - ./data/logs:/home/frappe/frappe-bench/logs
 
   create-site:
-    <<: *backend-image
+    <<: [*backend-image, *data-volumes]
     container_name: ${APP_NAME}-create-site
     restart: "no"
     networks:
@@ -73,9 +73,6 @@ services:
         condition: service_healthy
     environment:
       SITE_NAME: ${APP_URL:-frontend}
-    volumes:
-      - ./data/sites:/home/frappe/frappe-bench/sites
-      - ./data/logs:/home/frappe/frappe-bench/logs
     entrypoint:
       - bash
       - -c
@@ -125,7 +122,7 @@ services:
       - "${DB_MARIA_PORT}:3306"
 
   frontend:
-    <<: *backend-image
+    <<: [*backend-image, *data-volumes]
     container_name: ${APP_NAME}-frontend
     restart: unless-stopped
     networks:
@@ -145,14 +142,11 @@ services:
       UPSTREAM_REAL_IP_RECURSIVE: "off"
       PROXY_READ_TIMEOUT: "120"
       CLIENT_MAX_BODY_SIZE: 50m
-    volumes:
-      - ./data/sites:/home/frappe/frappe-bench/sites
-      - ./data/logs:/home/frappe/frappe-bench/logs
     ports:
       - "${APP_HTTP_PORT}:8080"
 
   queue-long:
-    <<: *backend-image
+    <<: [*backend-image, *data-volumes]
     container_name: ${APP_NAME}-queue-long
     restart: unless-stopped
     networks:
@@ -165,15 +159,12 @@ services:
       - worker
       - --queue
       - long,default,short
-    volumes:
-      - ./data/sites:/home/frappe/frappe-bench/sites
-      - ./data/logs:/home/frappe/frappe-bench/logs
     environment:
       FRAPPE_REDIS_CACHE: redis://redis-cache:6379
       FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
 
   queue-short:
-    <<: *backend-image
+    <<: [*backend-image, *data-volumes]
     container_name: ${APP_NAME}-queue-short
     restart: unless-stopped
     networks:
@@ -186,9 +177,6 @@ services:
       - worker
       - --queue
       - short,default
-    volumes:
-      - ./data/sites:/home/frappe/frappe-bench/sites
-      - ./data/logs:/home/frappe/frappe-bench/logs
     environment:
       FRAPPE_REDIS_CACHE: redis://redis-cache:6379
       FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
@@ -210,7 +198,7 @@ services:
       - ./data/redis-queue:/data
 
   scheduler:
-    <<: *backend-image
+    <<: [*backend-image, *data-volumes]
     container_name: ${APP_NAME}-scheduler
     restart: unless-stopped
     networks:
@@ -221,12 +209,9 @@ services:
     command:
       - bench
       - schedule
-    volumes:
-      - ./data/sites:/home/frappe/frappe-bench/sites
-      - ./data/logs:/home/frappe/frappe-bench/logs
 
   websocket:
-    <<: *backend-image
+    <<: [*backend-image, *data-volumes]
     container_name: ${APP_NAME}-websocket
     restart: unless-stopped
     networks:
@@ -237,9 +222,6 @@ services:
     command:
       - node
       - /home/frappe/frappe-bench/apps/frappe/socketio.js
-    volumes:
-      - ./data/sites:/home/frappe/frappe-bench/sites
-      - ./data/logs:/home/frappe/frappe-bench/logs
     environment:
       FRAPPE_REDIS_CACHE: redis://redis-cache:6379
       FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
@@ -263,4 +245,3 @@ networks:
     driver: bridge
 # All data is stored in local ./data/ directories for easy backup and access
 # No named volumes needed - using bind mounts instead
-
